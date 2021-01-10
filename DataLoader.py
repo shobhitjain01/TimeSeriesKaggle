@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 
 categories = pd.read_csv("KaggleData/item_categories.csv")
 items = pd.read_csv("KaggleData/items.csv")
