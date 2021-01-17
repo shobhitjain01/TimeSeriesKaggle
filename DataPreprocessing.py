@@ -16,6 +16,6 @@ monthly_data = pd.merge(shops,monthly_data,on=['shop_id'],how='inner')
 
 # Doing the same stuff for test
 test_modified = pd.merge(test,items, on = ['item_id'],how='inner')
-test_modified['month_block_num'] = 33
+test_modified['month_block_num'] = 34
 test_modified = test_modified.drop(['item_name'], axis=1)
 test_modified = test_modified.set_index('ID')
