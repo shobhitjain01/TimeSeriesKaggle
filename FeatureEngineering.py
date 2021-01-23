@@ -1,9 +1,22 @@
 # Repeating FeatureGeneration notebook as a python script
 
 from sklearn.preprocessing import LabelEncoder
+from sklearn.feature_extraction.text import TfidfVectorizer
 
-train['item_cnt_day'] = train['item_cnt_day'].clip(0,20)
+#### UPDATE in training 
 
+data = pd.DataFrame({'shop_id' : [],'item_id' : [],'date_block_num' : []})
+for i in range(34):
+    sales_shops = train[train['date_block_num'] == i][['shop_id']].drop_duplicates(subset=['shop_id'])
+    sales_items = train[train['date_block_num'] == i][['item_id']].drop_duplicates(subset=['item_id'])
+    sales_shops['key']=0;
+    sales_items['key']=0;
+    train_block = sales_shops.merge(sales_items);  # creates a cartesian product of all (shop, item) pairs in test will all date_block_num values
+    train_block = train_block.drop(['key'],axis=1);
+    train_block['date_block_num']=i
+    data = pd.concat([data, train_block], ignore_index=True, sort=False)
+
+    
 # Adding revenue now as it will be lost later when merged into monthly data
 train['daily_revenue'] = train['item_price'] * train['item_cnt_day']
 
@@ -21,33 +34,16 @@ monthly_data = train.groupby(['shop_id','item_id','date_block_num']).agg({'item_
 monthly_data['item_cnt_day'] = monthly_data['item_cnt_day'].clip(0,20)
 
 
-
-
-
-## !!! Here we combine test data points to train
-# We create test points in the train data set
-date_block_df = pd.DataFrame(list(range(34)),columns=['date_block_num']);
-date_block_df['month'] = date_block_df['date_block_num']%12+1
-date_block_df['year'] = 2013+date_block_df['date_block_num']//12
+data['month'] = data['date_block_num']%12+1
+data['year'] = 2013+data['date_block_num']//12
 month_days = pd.Series([0,31,28,31,30,31,30,31,31,30,31,30,31]);
-date_block_df['days_in_month'] = date_block_df['month'].map(month_days)
+data['days_in_month'] = data['month'].map(month_days)
 
-date_block_df['key']=0;
-test_copy = test.copy();
-test_copy['key']=0;
-test_copy = test_copy.merge(date_block_df);  # creates a cartesian product of all (shop, item) pairs in test will all date_block_num values
-test_copy = test_copy.drop(['ID','key'],axis=1);
-
-monthly_data = pd.merge(test_copy,monthly_data,on=['shop_id','item_id','date_block_num','month','year','days_in_month'],how='left') 
-
-
-# This will shift average counts towards zero
-monthly_data.fillna(0,inplace=True);
-
-
+monthly_data = pd.merge(data,monthly_data,on=['shop_id','item_id','date_block_num','month','year','days_in_month'],how='left') 
+monthly_data['ID']=-1
 
 # Making test like train and adding -1 to the columns that will be deleted later
-test = test.drop(['ID'],axis=1)
+# test = test.drop(['ID'],axis=1)
 test['date_block_num'] = 34;
 test['item_cnt_day'] = -1;
 test['item_price'] = -1;
@@ -55,22 +51,15 @@ test['daily_revenue'] = -1;
 test['month'] = 11
 test['year'] = 2015
 test['days_in_month'] = 31
+test.head()
 
 monthly_data = pd.concat([monthly_data, test], ignore_index=True, sort=False)
 
-# Text features
 
-categories_translated['category_type'] = categories_translated['item_category_name_translated'].map(lambda x: x.split(' - ')[0])
-categories_translated['category_sub-type'] = categories_translated['item_category_name_translated'].map(lambda x: x.split(' - ')[len(x.split(' - '))-1])
-categories_translated['category_type_encoded'] = LabelEncoder().fit_transform(categories_translated['category_type'])
-categories_translated['category_sub-type_encoded'] = LabelEncoder().fit_transform(categories_translated['category_sub-type'])
-shops_translated['shop_city'] = shops_translated['shop_name_translated'].map(lambda x: x.split(' ')[0])
-shops_translated['shop_city_encoded'] = LabelEncoder().fit_transform(shops_translated['shop_city'])
-
-# Merging files
 monthly_data = pd.merge(monthly_data,items,on=['item_id'],how='inner')
-monthly_data = pd.merge(monthly_data,categories_translated,on=['item_category_id'],how='inner')
-monthly_data = pd.merge(monthly_data,shops_translated,on=['shop_id'],how='inner')
+monthly_data = pd.merge(monthly_data,categories,on=['item_category_id'],how='inner')
+monthly_data = pd.merge(monthly_data,shops,on=['shop_id'],how='inner')
+
 
 # Calculating Lagged features
 def calculate_lag(lag,monthly_data,col):
@@ -88,50 +77,98 @@ def create_mean_features(train,monthly_data,groupby_cols,col_to_avg,new_col_name
     monthly_data = pd.merge(monthly_data,cur_group, on = groupby_cols,how = 'left');
     return monthly_data
 
+lag_window = 3;
 # lag_window affects this
 for i in ['item_cnt_day','item_price','daily_revenue']:
     for j in range(0,lag_window):
         monthly_data = calculate_lag(j+1,monthly_data,i)
         
-# Adding data to train to be used in calculating mean encoded features later
+        
 train = pd.merge(train,items,on=['item_id'],how='inner')
-train = pd.merge(train,categories_translated,on=['item_category_id'],how='inner')
-train = pd.merge(train,shops_translated,on=['shop_id'],how='inner')
+train = pd.merge(train,categories,on=['item_category_id'],how='inner')
+train = pd.merge(train,shops,on=['shop_id'],how='inner')
+
 
 # Mean encoded features
 
 # Average of overall items sold in a month
 monthly_data = create_mean_features(train,monthly_data,['date_block_num'],'item_cnt_day','item_cnt_avg_month')
-monthly_data = calculate_lag(1,monthly_data,'item_cnt_avg_month')
 # Average of overall items per item sold in a month
 monthly_data = create_mean_features(train,monthly_data,['date_block_num','item_id'],'item_cnt_day','item_cnt_avg_item_month')
-monthly_data = calculate_lag(1,monthly_data,'item_cnt_avg_item_month')
 # Average of overall items per shop sold in a month
 monthly_data = create_mean_features(train,monthly_data,['date_block_num','shop_id'],'item_cnt_day','item_cnt_avg_shop_month')
-monthly_data = calculate_lag(1,monthly_data,'item_cnt_avg_shop_month')
 # Average of overall items per category sold in a month
 monthly_data = create_mean_features(train,monthly_data,['date_block_num','item_category_id'],'item_cnt_day','item_cnt_avg_category_month')
-monthly_data = calculate_lag(1,monthly_data,'item_cnt_avg_category_month')
 # Average of overall items per category type sold in a month
 monthly_data = create_mean_features(train,monthly_data,['date_block_num','category_type'],'item_cnt_day','item_cnt_avg_categorytype_month')
-monthly_data = calculate_lag(1,monthly_data,'item_cnt_avg_categorytype_month')
 # Average of overall items per category subtype sold in a month
 monthly_data = create_mean_features(train,monthly_data,['date_block_num','category_sub-type'],'item_cnt_day','item_cnt_avg_categorysubtype_month')
-monthly_data = calculate_lag(1,monthly_data,'item_cnt_avg_categorysubtype_month')
 # Average of overall items per shop city sold in a month
 monthly_data = create_mean_features(train,monthly_data,['date_block_num','shop_city'],'item_cnt_day','item_cnt_avg_shopcity_month')
-monthly_data = calculate_lag(1,monthly_data,'item_cnt_avg_shopcity_month')
+
+# Average of overall items per shop per item sold in a month
+monthly_data = create_mean_features(train,monthly_data,['date_block_num','shop_id','item_id'],'item_cnt_day','item_cnt_avg_shopitem_month')
+# Average of overall items per shop city per item sold in a month
+monthly_data = create_mean_features(train,monthly_data,['date_block_num','shop_city','item_id'],'item_cnt_day','item_cnt_avg_shopcityitem_month')
+# Average of overall items per shop cuty per item category type sold in a month
+monthly_data = create_mean_features(train,monthly_data,['date_block_num','shop_city','category_type'],'item_cnt_day','item_cnt_avg_shopcitytype_month')
+# Average of overall items per shop cuty per item category sub-type sold in a month
+monthly_data = create_mean_features(train,monthly_data,['date_block_num','shop_city','category_sub-type'],'item_cnt_day','item_cnt_avg_shopcitysubtype_month')
+                                           
+
+for j in range(1,4):
+
+    monthly_data = calculate_lag(j,monthly_data,'item_cnt_avg_month')
+    monthly_data = calculate_lag(j,monthly_data,'item_cnt_avg_item_month')
+    monthly_data = calculate_lag(j,monthly_data,'item_cnt_avg_shop_month')
+    monthly_data = calculate_lag(j,monthly_data,'item_cnt_avg_category_month')
+    monthly_data = calculate_lag(j,monthly_data,'item_cnt_avg_categorytype_month')
+    monthly_data = calculate_lag(j,monthly_data,'item_cnt_avg_categorysubtype_month')
+    monthly_data = calculate_lag(j,monthly_data,'item_cnt_avg_shopcity_month')
+
+    monthly_data = calculate_lag(j,monthly_data,'item_cnt_avg_shopitem_month')
+    monthly_data = calculate_lag(j,monthly_data,'item_cnt_avg_shopcityitem_month')
+    monthly_data = calculate_lag(j,monthly_data,'item_cnt_avg_shopcitytype_month')
+    monthly_data = calculate_lag(j,monthly_data,'item_cnt_avg_shopcitysubtype_month')
+
+    
+lag_window2 = 3;
+# Creating trend features
+
+# delta price
+monthly_data = create_mean_features(train,monthly_data,['item_id'],'item_price','item_avg_price')
+monthly_data = create_mean_features(train,monthly_data,['item_id','date_block_num'],'item_price','item_monthly_avg_price')
+for j in range(0,lag_window2):
+    monthly_data = calculate_lag(j+1,monthly_data,'item_monthly_avg_price')
+    monthly_data['delta_price_lag_' + str(j+1) ] = (monthly_data['item_monthly_avg_price_lag' + str(j+1)]- monthly_data['item_avg_price'] ) / monthly_data['item_avg_price']
+
+# delta revenue
+monthly_data = create_mean_features(train,monthly_data,['shop_id'],'daily_revenue','shop_avg_revenue')
+monthly_data = create_mean_features(train,monthly_data,['shop_id','date_block_num'],'daily_revenue','shop_monthly_avg_revenue')
+for j in range(0,lag_window2):
+    monthly_data = calculate_lag(j+1,monthly_data,'shop_monthly_avg_revenue')
+    monthly_data['delta_revenue_lag_' + str(j+1) ] = (monthly_data['shop_monthly_avg_revenue_lag' + str(j+1)]- monthly_data['shop_avg_revenue'] ) / monthly_data['shop_avg_revenue']
+
+monthly_data = monthly_data.replace([np.inf, -np.inf], np.nan)
+
+
+
+monthly_data["item_shop_first_sale"] = monthly_data["date_block_num"] - monthly_data.groupby(["item_id","shop_id"])["date_block_num"].transform('min')
+monthly_data["item_first_sale"] = monthly_data["date_block_num"] - monthly_data.groupby(["item_id"])["date_block_num"].transform('min')
+
 
 # #Months since last sale
 monthly_data=monthly_data.sort_values(by=['shop_id','item_id','date_block_num'])
 monthly_data['#months_since_last_sales'] = monthly_data['date_block_num']-monthly_data['date_block_num'].shift(1,axis=0)
 monthly_data.loc[(monthly_data['shop_id']!=monthly_data['shop_id'].shift(1)) | (monthly_data['item_id']!=monthly_data['item_id'].shift(1)),'#months_since_last_sales']=0
 
-# Dropping lag window values
-learning_data = monthly_data[monthly_data['date_block_num'] < lag_window]
+# To preserve order of X_test
+monthly_data = monthly_data.sort_values(by=['ID'])
+monthly_data = monthly_data.drop(columns=['ID'])
 
-# Features to delete
-features_to_drop = ['item_price','daily_revenue','item_name','item_category_name_translated','category_type','category_sub-type','shop_name_translated','shop_city','item_cnt_avg_month','item_cnt_avg_item_month','item_cnt_avg_shop_month','item_cnt_avg_category_month','item_cnt_avg_categorytype_month','item_cnt_avg_categorysubtype_month','item_cnt_avg_shopcity_month'];
-learning_data = monthly_data.drop(features_to_drop, axis=1);
-learning_data = learning_data.rename(columns={'item_cnt_day':'item_cnt_month'});
-learning_data.fillna(0,inplace=True)
+# Dropping lag window values
+# learning_data = monthly_data[monthly_data['date_block_num'] >= lag_window]
+
+# Not dropping lagged values gives better result
+learning_data = monthly_data
+
